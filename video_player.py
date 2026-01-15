@@ -1,6 +1,7 @@
 """
 Video Player Module
 Handles YouTube video downloading and playback using OpenCV and yt-dlp
+Uses threaded frame buffering for smooth playback
 """
 
 import cv2
@@ -9,6 +10,8 @@ import yt_dlp
 import time
 import threading
 from typing import Optional, Tuple
+from queue import Queue, Empty
+from collections import deque
 
 
 class VideoPlayer:
@@ -16,7 +19,7 @@ class VideoPlayer:
     
     def __init__(self, cache_dir: str = "./data/cache"):
         """
-        Initialize video player
+        Initialize video player with threaded frame buffer
         
         Args:
             cache_dir: Directory to cache downloaded videos
@@ -33,6 +36,15 @@ class VideoPlayer:
         self.start_time = 0.0
         self.pause_time = 0.0
         self.total_paused_time = 0.0
+        
+        # Threaded frame buffer
+        self.frame_buffer = {}  # {frame_num: frame_data}
+        self.buffer_lock = threading.Lock()
+        self.decode_thread = None
+        self.stop_decoding = threading.Event()
+        self.seek_requested = threading.Event()
+        self.target_frame = 0
+        self.buffer_size = 90  # Buffer 3 seconds @ 30fps ahead
         
         # Create cache directory
         os.makedirs(cache_dir, exist_ok=True)
@@ -103,12 +115,75 @@ class VideoPlayer:
         # Reset frame counter
         self.current_frame = 0
         
+        # Start frame decode thread
+        self._start_decode_thread()
+        
         # Set up fullscreen window
         cv2.namedWindow('Dojo - Training Mode', cv2.WND_PROP_FULLSCREEN)
         cv2.setWindowProperty('Dojo - Training Mode', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         
         print(f"Video loaded: {self.total_frames} frames, {self.fps} fps, {self.duration:.2f}s")
         return True
+        
+    def _start_decode_thread(self):
+        """Start background thread for frame decoding"""
+        self.stop_decoding.clear()
+        self.seek_requested.clear()
+        self.decode_thread = threading.Thread(target=self._decode_frames, daemon=True)
+        self.decode_thread.start()
+        
+    def _decode_frames(self):
+        """Background thread that decodes frames ahead of playback"""
+        decode_cap = cv2.VideoCapture(self.video_path)
+        
+        while not self.stop_decoding.is_set():
+            # Check if seek was requested
+            if self.seek_requested.is_set():
+                with self.buffer_lock:
+                    # Clear buffer and seek
+                    self.frame_buffer.clear()
+                    target = self.target_frame
+                self.seek_requested.clear()
+                decode_cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+                
+            # If paused or buffer is full enough, wait a bit
+            with self.buffer_lock:
+                buffer_keys = list(self.frame_buffer.keys())
+                current = self.current_frame
+                
+            if self.is_paused:
+                time.sleep(0.01)
+                continue
+                
+            # Check if we have enough frames buffered ahead
+            if buffer_keys and max(buffer_keys) >= current + self.buffer_size:
+                time.sleep(0.005)
+                continue
+                
+            # Decode next frame
+            ret, frame = decode_cap.read()
+            if not ret:
+                # End of video or error
+                time.sleep(0.1)
+                continue
+                
+            frame_num = int(decode_cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+            
+            # Add to buffer
+            with self.buffer_lock:
+                self.frame_buffer[frame_num] = frame.copy()
+                
+                # Cleanup old frames (keep a small window behind)
+                frames_to_remove = [f for f in self.frame_buffer.keys() if f < current - 30]
+                for f in frames_to_remove:
+                    del self.frame_buffer[f]
+                    
+        decode_cap.release()
+        
+    def _request_seek(self, frame_num: int):
+        """Request the decode thread to seek to a specific frame"""
+        self.target_frame = frame_num
+        self.seek_requested.set()
         
     def play(self):
         """Start or resume video playback"""
@@ -171,7 +246,7 @@ class VideoPlayer:
         
     def get_frame(self) -> Tuple[bool, Optional[any]]:
         """
-        Get frame for display based on elapsed time
+        Get frame for display from buffer based on elapsed time
         
         Returns:
             Tuple of (success, frame) where frame is the one that should be displayed now
@@ -179,15 +254,15 @@ class VideoPlayer:
         if not self.cap or not self.is_playing:
             return False, None
             
-        # If paused, return current frame without advancing
+        # If paused, return current frame from buffer
         if self.is_paused:
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
-            ret, frame = self.cap.read()
-            # Verify the frame position from OpenCV
-            if ret:
-                actual_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
-                self.current_frame = actual_frame
-            return ret, frame
+            with self.buffer_lock:
+                if self.current_frame in self.frame_buffer:
+                    return True, self.frame_buffer[self.current_frame].copy()
+                # Frame not in buffer, request it
+                self._request_seek(self.current_frame)
+            time.sleep(0.01)  # Wait for buffer to populate
+            return False, None
         
         # Calculate which frame should be displayed based on elapsed time
         elapsed_time = time.time() - self.start_time - self.total_paused_time
@@ -201,16 +276,31 @@ class VideoPlayer:
             self.stop()
             return False, None
         
-        # Seek to the target frame
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-        ret, frame = self.cap.read()
-        
-        # Get the ACTUAL frame number from OpenCV after reading
-        if ret:
-            actual_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
-            self.current_frame = actual_frame
+        # Try to get frame from buffer
+        with self.buffer_lock:
+            if target_frame in self.frame_buffer:
+                frame = self.frame_buffer[target_frame].copy()
+                self.current_frame = target_frame + 1
+                return True, frame
             
-        return ret, frame
+            # Frame not ready yet - check if we're behind or ahead
+            available_frames = sorted(self.frame_buffer.keys())
+            
+            if not available_frames:
+                # Buffer empty, request seek
+                self._request_seek(target_frame)
+                return False, None
+                
+            # Use closest available frame
+            closest = min(available_frames, key=lambda x: abs(x - target_frame))
+            frame = self.frame_buffer[closest].copy()
+            self.current_frame = closest + 1
+            
+            # If we're significantly off, request seek
+            if abs(closest - target_frame) > 5:
+                self._request_seek(target_frame)
+                
+            return True, frame
         
     def display_frame(self, frame):
         """
@@ -236,6 +326,11 @@ class VideoPlayer:
             
     def cleanup(self):
         """Clean up resources"""
+        # Stop decode thread
+        self.stop_decoding.set()
+        if self.decode_thread and self.decode_thread.is_alive():
+            self.decode_thread.join(timeout=1.0)
+            
         if self.cap:
             self.cap.release()
         cv2.destroyAllWindows()
