@@ -140,7 +140,15 @@ class VideoPlayer:
         cv2.destroyAllWindows()
         print("Stopped")
         
-    def get_current_time(self) -> float:
+    def get_displayed_frame_number(self) -> int:
+        """
+        Get the frame number that was just displayed
+        
+        Returns:
+            The frame number of the most recently displayed frame
+        """
+        # current_frame is the NEXT frame to read, so subtract 1 for displayed frame
+        return max(0, self.current_frame - 1)
         """Get current playback time in seconds based on frame position"""
         if not self.cap:
             return 0.0
@@ -153,7 +161,7 @@ class VideoPlayer:
         Get next frame for display
         
         Returns:
-            Tuple of (success, frame)
+            Tuple of (success, frame) where frame is tagged with its actual frame number
         """
         if not self.cap or not self.is_playing:
             return False, None
@@ -162,6 +170,10 @@ class VideoPlayer:
         if self.is_paused:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
             ret, frame = self.cap.read()
+            # Verify the frame position from OpenCV
+            if ret:
+                actual_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+                self.current_frame = actual_frame
             return ret, frame
             
         # Check if video ended
@@ -169,9 +181,15 @@ class VideoPlayer:
             self.stop()
             return False, None
             
+        # Set position to current frame and read it
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
         ret, frame = self.cap.read()
+        
+        # Get the ACTUAL frame number from OpenCV after reading
+        # This is the ground truth - use this instead of our counter
         if ret:
-            self.current_frame += 1
+            actual_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+            self.current_frame = actual_frame
             
         return ret, frame
         

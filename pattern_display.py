@@ -38,26 +38,42 @@ class KeyNote:
         self.accuracy = None
         
     def get_x_position(self, current_frame: int, lookahead_frames: int = 150, 
-                       screen_width: int = 1280) -> Optional[int]:
+                       screen_width: int = 1280, center_x_ratio: float = 0.5) -> Optional[int]:
         """
         Calculate X position of note on screen
         
         Args:
             current_frame: Current frame number
-            lookahead_frames: Frame window visible on timeline
+            lookahead_frames: Frame window visible on timeline (frames shown ahead)
             screen_width: Screen width
+            center_x_ratio: Where the center target line is (0-1)
             
         Returns:
             X pixel position or None if off-screen
         """
         frames_until_press = self.frame - current_frame
         
-        # If in the past (beyond left edge) or too far in future, off screen
+        # If too far in the past or future, off screen
         if frames_until_press < -15 or frames_until_press > lookahead_frames:
             return None
-            
-        # Map frames to x position
-        x = int((frames_until_press / lookahead_frames) * screen_width)
+        
+        # Calculate center position
+        center_x = int(screen_width * center_x_ratio)
+        
+        # Map frames to x position:
+        # frames_until_press = 0 -> x = center_x (time to press!)
+        # frames_until_press = lookahead_frames -> x = screen_width (far right)
+        # frames_until_press = -15 -> x = 0 (far left, just passed)
+        
+        # Linear interpolation from center
+        if frames_until_press >= 0:
+            # Future: between center and right edge
+            # Map [0, lookahead_frames] to [center_x, screen_width]
+            x = center_x + int((frames_until_press / lookahead_frames) * (screen_width - center_x))
+        else:
+            # Past: between left edge and center
+            # Map [-15, 0] to [0, center_x]
+            x = center_x + int((frames_until_press / 15) * center_x)
         
         return max(0, min(x, screen_width - 1))
         
@@ -236,7 +252,7 @@ class PatternDisplay:
         center_x = int(self.screen_width * self.CENTER_X_RATIO)
         
         for note in self.notes:
-            x = note.get_x_position(current_frame, self.lookahead_frames, self.screen_width)
+            x = note.get_x_position(current_frame, self.lookahead_frames, self.screen_width, self.CENTER_X_RATIO)
             
             if x is None:
                 continue

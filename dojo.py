@@ -160,11 +160,11 @@ class DojoApp:
                 ret, frame = self.video_player.get_frame()
                 
                 if ret and frame is not None:
-                    # Get current frame number
-                    current_frame = self.video_player.current_frame
+                    # Get frame number using OpenCV's ground truth
+                    displayed_frame = self.video_player.get_displayed_frame_number()
                     
                     # Render pattern display
-                    frame = self.pattern_display.render(frame, current_frame, self.video_player.fps)
+                    frame = self.pattern_display.render(frame, displayed_frame, self.video_player.fps)
                     
                     # Display frame
                     cv2.imshow('Dojo - Training Mode', frame)
@@ -215,7 +215,8 @@ class DojoApp:
                     key_str = str(key).replace('Key.', '')
                     
                 if not self.video_player.is_paused and self.pattern_display:
-                    current_frame = self.video_player.current_frame
+                    # Use OpenCV's ground truth for the displayed frame
+                    current_frame = self.video_player.get_displayed_frame_number()
                     self.pattern_display.register_key_press(key_str, current_frame)
             except:
                 pass
@@ -262,7 +263,8 @@ class DojoApp:
                     return
                     
                 if not self.video_player.is_paused:
-                    current_frame = self.video_player.current_frame
+                    # Record using OpenCV's ground truth frame number
+                    current_frame = self.video_player.get_displayed_frame_number()
                     self.input_recorder.record_frame_based_keystroke(current_frame, key_str, 'press')
             except:
                 pass
@@ -280,7 +282,8 @@ class DojoApp:
                     return
                     
                 if not self.video_player.is_paused:
-                    current_frame = self.video_player.current_frame
+                    # Record using OpenCV's ground truth frame number
+                    current_frame = self.video_player.get_displayed_frame_number()
                     self.input_recorder.record_frame_based_keystroke(current_frame, key_str, 'release')
             except:
                 pass
@@ -356,14 +359,14 @@ class DojoApp:
                 ret, frame = self.video_player.get_frame()
                 
                 if ret and frame is not None:
-                    # Add frame number overlay
-                    current_frame = self.video_player.current_frame
-                    current_time = self.video_player.get_current_time()
+                    # Use OpenCV's actual frame position as ground truth
+                    displayed_frame = self.video_player.get_displayed_frame_number()
+                    current_time = displayed_frame / self.video_player.fps
                     
                     # Display frame info
                     frame_copy = frame.copy()
                     font = cv2.FONT_HERSHEY_SIMPLEX
-                    time_text = f"Time: {current_time:.2f}s | Frame: {current_frame}"
+                    time_text = f"Time: {current_time:.2f}s | Frame: {displayed_frame}"
                     cv2.putText(frame_copy, time_text, (10, frame.shape[0] - 20), 
                                font, 0.7, (255, 255, 255), 2)
                     
