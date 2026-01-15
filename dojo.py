@@ -170,7 +170,8 @@ class DojoApp:
                     cv2.imshow('Dojo - Training Mode', frame)
                     
                 # Handle keyboard input
-                delay = int(1000 / self.video_player.fps) if not self.video_player.is_paused else 1
+                # Use minimal delay - frame timing is handled by video player
+                delay = 1  # 1ms for responsive input
                 key = cv2.waitKey(delay) & 0xFF
                 
                 if key == ord(' '):
@@ -178,7 +179,9 @@ class DojoApp:
                 elif key == ord('r') or key == ord('R'):
                     # Restart
                     self.video_player.current_frame = 0
-                    self.video_player.start_time = 0  # Reset timing
+                    self.video_player.start_time = time.time()
+                    self.video_player.total_paused_time = 0.0
+                    self.video_player.is_paused = True
                     self.pattern_display.reset()
                     self.pattern_display.add_notes(pattern.get_key_presses())
                 elif key == 27:  # ESC
@@ -378,8 +381,8 @@ class DojoApp:
                     cv2.imshow('Dojo - Training Mode', frame_copy)
                     
                 # Handle keyboard input for video control
-                # Wait time based on fps for proper playback speed
-                delay = int(1000 / self.video_player.fps) if not self.video_player.is_paused else 1
+                # Use minimal delay - frame timing is handled by video player's elapsed time calculation
+                delay = 1  # 1ms delay for responsive input
                 key = cv2.waitKey(delay) & 0xFF
                 
                 if key == ord(' '):

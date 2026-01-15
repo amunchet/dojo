@@ -31,6 +31,8 @@ class VideoPlayer:
         self.total_frames = 0
         self.duration = 0.0
         self.start_time = 0.0
+        self.pause_time = 0.0
+        self.total_paused_time = 0.0
         
         # Create cache directory
         os.makedirs(cache_dir, exist_ok=True)
@@ -115,13 +117,24 @@ class VideoPlayer:
             return
             
         self.is_playing = True
+        was_paused = self.is_paused
         self.is_paused = False
-        self.start_time = time.time() - (self.current_frame / self.fps)
+        
+        if was_paused and self.pause_time > 0:
+            # Resuming from pause - add paused duration to total
+            self.total_paused_time += time.time() - self.pause_time
+            self.pause_time = 0.0
+        else:
+            # Starting fresh
+            self.start_time = time.time()
+            self.total_paused_time = 0.0
+            
         print("Playing...")
         
     def pause(self):
         """Pause video playback"""
         self.is_paused = True
+        self.pause_time = time.time()
         print("Paused")
         
     def toggle_pause(self):
@@ -158,10 +171,10 @@ class VideoPlayer:
         
     def get_frame(self) -> Tuple[bool, Optional[any]]:
         """
-        Get next frame for display
+        Get frame for display based on elapsed time
         
         Returns:
-            Tuple of (success, frame) where frame is tagged with its actual frame number
+            Tuple of (success, frame) where frame is the one that should be displayed now
         """
         if not self.cap or not self.is_playing:
             return False, None
@@ -175,18 +188,24 @@ class VideoPlayer:
                 actual_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.current_frame = actual_frame
             return ret, frame
-            
+        
+        # Calculate which frame should be displayed based on elapsed time
+        elapsed_time = time.time() - self.start_time - self.total_paused_time
+        target_frame = int(elapsed_time * self.fps)
+        
+        # Clamp to valid range
+        target_frame = max(0, min(target_frame, self.total_frames - 1))
+        
         # Check if video ended
-        if self.current_frame >= self.total_frames:
+        if target_frame >= self.total_frames - 1:
             self.stop()
             return False, None
-            
-        # Set position to current frame and read it
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
+        
+        # Seek to the target frame
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
         ret, frame = self.cap.read()
         
         # Get the ACTUAL frame number from OpenCV after reading
-        # This is the ground truth - use this instead of our counter
         if ret:
             actual_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
             self.current_frame = actual_frame
