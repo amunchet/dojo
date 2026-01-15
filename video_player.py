@@ -98,6 +98,9 @@ class VideoPlayer:
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.duration = self.total_frames / self.fps
         
+        # Reset frame counter
+        self.current_frame = 0
+        
         # Set up fullscreen window
         cv2.namedWindow('Dojo - Training Mode', cv2.WND_PROP_FULLSCREEN)
         cv2.setWindowProperty('Dojo - Training Mode', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
@@ -138,9 +141,11 @@ class VideoPlayer:
         print("Stopped")
         
     def get_current_time(self) -> float:
-        """Get current playback time in seconds"""
+        """Get current playback time in seconds based on frame position"""
         if not self.cap:
             return 0.0
+        
+        # Always use frame-based time to stay in sync with actual frames being displayed
         return self.current_frame / self.fps
         
     def get_frame(self) -> Tuple[bool, Optional[any]]:

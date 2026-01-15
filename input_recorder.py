@@ -97,6 +97,14 @@ class InputRecorder:
         """Get the recorded keystroke data"""
         return self.keystrokes.copy()
         
+    def record_frame_based_keystroke(self, frame: int, key: str, action: str):
+        """Record a keystroke with frame number instead of time"""
+        self.keystrokes.append({
+            'frame': frame,
+            'key': key,
+            'action': action
+        })
+        
     def set_escape_callback(self, callback: Callable):
         """Set callback function to be called when ESC is pressed"""
         self.on_escape_callback = callback
