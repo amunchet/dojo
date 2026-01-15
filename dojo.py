@@ -13,6 +13,7 @@ from video_player import VideoPlayer
 from input_recorder import InputRecorder
 from pattern_manager import PatternManager
 from pattern_display import PatternDisplay
+from visual_trigger import VisualTrigger
 from pynput import keyboard
 
 
@@ -24,10 +25,12 @@ class DojoApp:
         self.input_recorder = InputRecorder()
         self.pattern_manager = PatternManager()
         self.pattern_display = None
+        self.visual_trigger = VisualTrigger(threshold=25.0)
         self.running = False
         self.video_url = None
         self.stage = 1  # Current stage
         self.keyboard_listener = None
+        self.pending_trigger_frame = None  # Frame waiting for key assignment
         
         # Create data directories
         os.makedirs("data/recordings", exist_ok=True)
@@ -299,6 +302,17 @@ class DojoApp:
         if self.keyboard_listener:
             self.keyboard_listener.stop()
             self.keyboard_listener = None
+            
+    def _mouse_callback_recording(self, event, x, y, flags, param):
+        """Mouse callback for ROI selection in recording mode"""
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.visual_trigger.start_selection(x, y)
+        elif event == cv2.EVENT_MOUSEMOVE:
+            self.visual_trigger.update_selection(x, y)
+        elif event == cv2.EVENT_LBUTTONUP:
+            self.visual_trigger.finish_selection()
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            self.visual_trigger.cancel_selection()
         
     def run(self):
         """Main application loop"""
@@ -339,7 +353,12 @@ class DojoApp:
             print("\nControls:")
             print("  SPACE - Play/Pause")
             print("  ESC   - Stop and save recording")
+            print("  Click & Drag - Select ROI for visual triggers")
+            print("  C     - Clear ROI")
             print("\nReady to record. Press SPACE to start.")
+            
+            # Set mouse callback for ROI selection
+            cv2.setMouseCallback('Dojo - Training Mode', self._mouse_callback_recording)
             
             # Set escape callback
             self.input_recorder.set_escape_callback(self.handle_escape)
@@ -355,6 +374,7 @@ class DojoApp:
             self.running = True
             recording_started = False
             was_paused = True
+            visual_trigger_mode = False  # Whether we're waiting for key input after trigger
             
             # Main loop
             while self.running:
@@ -366,17 +386,42 @@ class DojoApp:
                     displayed_frame = self.video_player.get_displayed_frame_number()
                     current_time = displayed_frame / self.video_player.fps
                     
+                    # Check for visual trigger if ROI is set and recording
+                    if recording_started and not self.video_player.is_paused and self.visual_trigger.has_roi():
+                        if self.visual_trigger.detect_change(frame):
+                            # Visual change detected - pause and wait for key
+                            self.video_player.pause()
+                            self.pending_trigger_frame = displayed_frame
+                            visual_trigger_mode = True
+                            print(f"\n>>> Visual trigger at frame {displayed_frame}! Enter key to associate (or ESC to skip): ", end='', flush=True)
+                    
                     # Display frame info
                     frame_copy = frame.copy()
+                    
+                    # Draw ROI if set
+                    self.visual_trigger.draw_roi(frame_copy)
+                    
                     font = cv2.FONT_HERSHEY_SIMPLEX
                     time_text = f"Time: {current_time:.2f}s | Frame: {displayed_frame}"
                     cv2.putText(frame_copy, time_text, (10, frame.shape[0] - 20), 
                                font, 0.7, (255, 255, 255), 2)
                     
-                    status = "RECORDING" if recording_started else "PAUSED"
-                    color = (0, 0, 255) if recording_started else (0, 255, 255)
+                    if visual_trigger_mode:
+                        status = "WAITING FOR KEY"
+                        color = (0, 255, 255)  # Yellow
+                    elif recording_started:
+                        status = "RECORDING"
+                        color = (0, 0, 255)  # Red
+                    else:
+                        status = "PAUSED"
+                        color = (0, 255, 255)  # Cyan
+                        
                     cv2.putText(frame_copy, status, (10, 30), 
                                font, 0.7, color, 2)
+                    
+                    if self.visual_trigger.has_roi():
+                        cv2.putText(frame_copy, "ROI Active", (10, 60), 
+                                   font, 0.6, (0, 255, 0), 2)
                     
                     cv2.imshow('Dojo - Training Mode', frame_copy)
                     
@@ -384,6 +429,23 @@ class DojoApp:
                 # Use minimal delay - frame timing is handled by video player's elapsed time calculation
                 delay = 1  # 1ms delay for responsive input
                 key = cv2.waitKey(delay) & 0xFF
+                
+                # Handle visual trigger key input
+                if visual_trigger_mode and key != 255:
+                    if key == 27:  # ESC - skip this trigger
+                        print("Skipped")
+                        visual_trigger_mode = False
+                        self.pending_trigger_frame = None
+                        self.video_player.play()
+                    else:
+                        # Record the key for this frame
+                        key_char = chr(key) if 32 <= key <= 126 else f"key_{key}"
+                        self.input_recorder.record_frame_based_keystroke(self.pending_trigger_frame, key_char, 'press')
+                        print(f"'{key_char}' recorded for frame {self.pending_trigger_frame}")
+                        visual_trigger_mode = False
+                        self.pending_trigger_frame = None
+                        self.video_player.play()
+                    continue
                 
                 if key == ord(' '):
                     # Space bar - toggle pause
@@ -393,7 +455,11 @@ class DojoApp:
                     # Start recording when video transitions from paused to playing
                     if was_paused and not self.video_player.is_paused and not recording_started:
                         recording_started = True
-                        print("Recording started at frame", self.video_player.current_frame)
+                        print("Recording started at frame", self.video_player.get_displayed_frame_number())
+                    
+                elif key == ord('c') or key == ord('C'):
+                    # Clear ROI
+                    self.visual_trigger.clear_roi()
                     
                 elif key == 27:  # ESC key
                     break
