@@ -118,6 +118,10 @@ class VideoPlayer:
         # Start frame decode thread
         self._start_decode_thread()
         
+        # Wait for initial buffer to populate
+        print("Buffering frames...")
+        self._wait_for_buffer(min_frames=30)
+        
         # Set up fullscreen window
         cv2.namedWindow('Dojo - Training Mode', cv2.WND_PROP_FULLSCREEN)
         cv2.setWindowProperty('Dojo - Training Mode', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
@@ -146,12 +150,14 @@ class VideoPlayer:
                 self.seek_requested.clear()
                 decode_cap.set(cv2.CAP_PROP_POS_FRAMES, target)
                 
-            # If paused or buffer is full enough, wait a bit
             with self.buffer_lock:
                 buffer_keys = list(self.frame_buffer.keys())
                 current = self.current_frame
+                buffer_size = len(self.frame_buffer)
+                is_paused = self.is_paused
                 
-            if self.is_paused:
+            # If paused and buffer has enough, wait
+            if is_paused and buffer_size > 10:
                 time.sleep(0.01)
                 continue
                 
@@ -163,7 +169,8 @@ class VideoPlayer:
             # Decode next frame
             ret, frame = decode_cap.read()
             if not ret:
-                # End of video or error
+                # End of video or error - try to loop back
+                decode_cap.set(cv2.CAP_PROP_POS_FRAMES, current)
                 time.sleep(0.1)
                 continue
                 
@@ -184,6 +191,18 @@ class VideoPlayer:
         """Request the decode thread to seek to a specific frame"""
         self.target_frame = frame_num
         self.seek_requested.set()
+        
+    def _wait_for_buffer(self, min_frames: int = 30, timeout: float = 5.0):
+        """Wait for buffer to contain minimum number of frames"""
+        start = time.time()
+        while time.time() - start < timeout:
+            with self.buffer_lock:
+                if len(self.frame_buffer) >= min_frames:
+                    print(f"Buffer ready: {len(self.frame_buffer)} frames")
+                    return True
+            time.sleep(0.1)
+        print(f"Buffer timeout: only {len(self.frame_buffer)} frames buffered")
+        return False
         
     def play(self):
         """Start or resume video playback"""
