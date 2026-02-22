@@ -574,11 +574,28 @@ class DojoApp:
                     # Check for visual trigger if ROI is set and recording
                     if recording_started and not self.video_player.is_paused and self.visual_trigger.has_roi():
                         if self.visual_trigger.detect_change(frame):
-                            # Visual change detected - pause and wait for key
+                            # Visual change detected - check library first
                             self.video_player.pause()
                             self.pending_trigger_frame = displayed_frame
-                            visual_trigger_mode = True
-                            print(f"\n>>> Visual trigger at frame {displayed_frame}! Enter key to associate (or ESC to skip): ", end='', flush=True)
+                            
+                            # Check if this matches a known trigger in the library
+                            matched_trigger = self.trigger_library.find_matching_trigger(
+                                frame, self.visual_trigger.roi, threshold=0.75
+                            )
+                            
+                            if matched_trigger:
+                                # Found a match! Use the saved key automatically
+                                key_char = matched_trigger['key']
+                                spell_name = matched_trigger['spell_name']
+                                print(f"\n>>> Visual trigger matched: '{spell_name}' (Key: {key_char}, Match: {matched_trigger['match_score']:.2f})")
+                                print(f">>> Auto-recording '{key_char}' for frame {displayed_frame}")
+                                self.input_recorder.record_frame_based_keystroke(displayed_frame, key_char, 'press')
+                                self.pending_trigger_frame = None
+                                self.video_player.play()
+                            else:
+                                # Unknown trigger - ask user for key
+                                visual_trigger_mode = True
+                                print(f"\n>>> NEW visual trigger at frame {displayed_frame}! Enter key to associate (or ESC to skip): ", end='', flush=True)
                     
                     # Display frame info
                     frame_copy = frame.copy()
