@@ -14,6 +14,7 @@ from input_recorder import InputRecorder
 from pattern_manager import PatternManager
 from pattern_display import PatternDisplay
 from visual_trigger import VisualTrigger
+from trigger_library import VisualTriggerLibrary
 from pynput import keyboard
 
 
@@ -26,6 +27,7 @@ class DojoApp:
         self.pattern_manager = PatternManager()
         self.pattern_display = None
         self.visual_trigger = VisualTrigger(threshold=25.0)
+        self.trigger_library = VisualTriggerLibrary()
         self.running = False
         self.video_url = None
         self.stage = 1  # Current stage
@@ -78,13 +80,14 @@ class DojoApp:
         print("=" * 50)
         print("1 - Stage 1: Record Keystrokes (Create New Pattern)")
         print("2 - Stage 2: Practice with Pattern (Play Recorded Pattern)")
+        print("3 - Manage Trigger Library")
         print("=" * 50)
         
         while True:
-            choice = input("\nEnter choice (1 or 2): ").strip()
-            if choice in ['1', '2']:
+            choice = input("\nEnter choice (1, 2, or 3): ").strip()
+            if choice in ['1', '2', '3']:
                 return int(choice)
-            print("Invalid choice. Please enter 1 or 2.")
+            print("Invalid choice. Please enter 1, 2, or 3.")
             
     def run_stage2_practice(self):
         """Run Stage 2 - Pattern practice mode"""
@@ -422,6 +425,78 @@ class DojoApp:
         elif event == cv2.EVENT_RBUTTONDOWN:
             self.visual_trigger.cancel_selection()
         
+    def manage_trigger_library(self):
+        """Manage the visual trigger library"""
+        while True:
+            print("\n" + "=" * 50)
+            print("TRIGGER LIBRARY MANAGEMENT")
+            print("=" * 50)
+            triggers = self.trigger_library.list_triggers()
+            
+            if not triggers:
+                print("\nNo triggers in library yet.")
+            else:
+                print(f"\nTotal triggers: {len(triggers)}\n")
+                for i, trigger in enumerate(triggers, 1):
+                    print(f"{i}. {trigger['spell_name']} (Key: {trigger['key']}, "
+                          f"Pause: {trigger['pause_before_seconds']}s)")
+                    print(f"   ID: {trigger['id']}")
+                    print(f"   Created: {trigger.get('created_at', 'Unknown')}\n")
+            
+            print("Options:")
+            print("1 - Delete a trigger")
+            print("2 - Update trigger details")
+            print("3 - Back to main menu")
+            
+            choice = input("\nEnter choice: ").strip()
+            
+            if choice == '1' and triggers:
+                # Delete trigger
+                idx = input("Enter trigger number to delete: ").strip()
+                try:
+                    idx = int(idx) - 1
+                    if 0 <= idx < len(triggers):
+                        trigger_id = triggers[idx]['id']
+                        confirm = input(f"Delete '{triggers[idx]['spell_name']}'? (y/n): ").strip().lower()
+                        if confirm == 'y':
+                            self.trigger_library.delete_trigger(trigger_id)
+                            print("Trigger deleted.")
+                except:
+                    print("Invalid input.")
+                    
+            elif choice == '2' and triggers:
+                # Update trigger
+                idx = input("Enter trigger number to update: ").strip()
+                try:
+                    idx = int(idx) - 1
+                    if 0 <= idx < len(triggers):
+                        trigger = triggers[idx]
+                        print(f"\nUpdating: {trigger['spell_name']}")
+                        
+                        spell_name = input(f"Spell name [{trigger['spell_name']}]: ").strip()
+                        key = input(f"Key [{trigger['key']}]: ").strip()
+                        pause = input(f"Pause before (s) [{trigger['pause_before_seconds']}]: ").strip()
+                        
+                        updates = {}
+                        if spell_name:
+                            updates['spell_name'] = spell_name
+                        if key:
+                            updates['key'] = key
+                        if pause:
+                            try:
+                                updates['pause_before_seconds'] = float(pause)
+                            except:
+                                pass
+                        
+                        if updates:
+                            self.trigger_library.update_trigger(trigger['id'], **updates)
+                            print("Trigger updated.")
+                except:
+                    print("Invalid input.")
+                    
+            elif choice == '3':
+                break
+    
     def run(self):
         """Main application loop"""
         print("=" * 50)
@@ -435,6 +510,8 @@ class DojoApp:
             self.run_stage1_recording()
         elif self.stage == 2:
             self.run_stage2_practice()
+        elif self.stage == 3:
+            self.manage_trigger_library()
             
     def run_stage1_recording(self):
         """Run Stage 1 - Keystroke recording mode"""
@@ -550,6 +627,31 @@ class DojoApp:
                         key_char = chr(key) if 32 <= key <= 126 else f"key_{key}"
                         self.input_recorder.record_frame_based_keystroke(self.pending_trigger_frame, key_char, 'press')
                         print(f"'{key_char}' recorded for frame {self.pending_trigger_frame}")
+                        
+                        # Ask if user wants to save this as a library trigger
+                        print("\nSave this visual trigger to library? (y/n): ", end='', flush=True)
+                        save_choice = input().strip().lower()
+                        
+                        if save_choice == 'y':
+                            # Get spell name
+                            spell_name = input("Enter spell/ability name: ").strip()
+                            pause_before = input("Pause before (seconds, default 1.0): ").strip()
+                            try:
+                                pause_before = float(pause_before) if pause_before else 1.0
+                            except:
+                                pause_before = 1.0
+                            
+                            # Extract ROI image from current frame
+                            x, y, w, h = self.visual_trigger.roi
+                            roi_image = frame[y:y+h, x:x+w].copy()
+                            
+                            # Save to library
+                            trigger_id = self.trigger_library.add_trigger(
+                                roi_image, self.visual_trigger.roi, 
+                                key_char, spell_name, pause_before
+                            )
+                            print(f"Trigger saved! ID: {trigger_id}\n")
+                        
                         visual_trigger_mode = False
                         self.pending_trigger_frame = None
                         self.video_player.play()
