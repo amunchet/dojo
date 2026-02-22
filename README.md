@@ -10,6 +10,17 @@ Train your mechanical skills for World of Warcraft boss encounters using video p
 pip install -r requirements.txt
 ```
 
+### macOS Setup
+- **ffmpeg**: Required for downloading YouTube videos. Install via Homebrew:
+  ```bash
+  brew install ffmpeg
+  ```
+- **Keyboard Input Permission**: On first run, macOS will require you to grant accessibility permission for keyboard event monitoring:
+  1. Go to **System Settings** → **Privacy & Security** → **Accessibility**
+  2. Click the **+** button and select **Terminal** (or your code editor)
+  3. Close and reopen Terminal/Editor
+  4. Run `python dojo.py` again
+
 ## Usage (Stage 1)
 
 Run the application:

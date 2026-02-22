@@ -144,42 +144,142 @@ class DojoApp:
         self.video_player.start_time = 0
         
         print("\nControls:")
-        print("  SPACE - Play/Pause")
+        print("  Press required key to start (shown on screen)")
         print("  R     - Restart")
         print("  ESC   - Exit")
-        print("\nReady to play. Press SPACE to start.")
-        
-        # Setup keyboard listener for pattern practice
-        self._start_practice_listener()
+        print("\nReady to play. Video will pause 1 second before each key event.")
         
         try:
+            # --- Setup for Stage 2: pause before key events, require correct key press ---
+            notes = self.pattern_display.notes if self.pattern_display else []
+            note_frames = sorted([note.frame for note in notes])
+            pause_lead_time = 1.0  # seconds before event to pause
+            fps = self.video_player.fps if self.video_player else 30
+            pause_lead_frames = int(pause_lead_time * fps)
+            next_pause_idx = 0
+            paused_for_event = False
+            required_key = None
+
+            def get_required_key():
+                if next_pause_idx < len(notes):
+                    return notes[next_pause_idx].key
+                return None
+
+            def on_practice_key_press(key):
+                nonlocal paused_for_event, next_pause_idx, required_key
+                try:
+                    if key == keyboard.Key.esc:
+                        self.running = False
+                        return False
+                    key_str = None
+                    try:
+                        key_str = key.char
+                    except AttributeError:
+                        key_str = str(key).replace('Key.', '')
+                    
+                    print(f"DEBUG: Key pressed: '{key_str}' (type: {type(key_str)})")
+                    
+                    # Only allow resume if paused for event and correct key OR space is pressed
+                    if paused_for_event and required_key is not None:
+                        print(f"DEBUG: Paused for event, required_key='{required_key}', key_str='{key_str}'")
+                        # Accept the required key, space character, or 'space' string
+                        if key_str == required_key or key_str == ' ' or key_str == 'space':
+                            if key_str == required_key:
+                                print(f">>> Correct! '{required_key.upper()}' pressed. Continuing...\n")
+                            else:
+                                print(f">>> SPACE pressed. Continuing...\n")
+                            print(f"DEBUG: Calling video_player.play()")
+                            self.video_player.play()
+                            print(f"DEBUG: is_paused is now {self.video_player.is_paused}")
+                            next_pause_idx += 1
+                            paused_for_event = False
+                            required_key = None
+                        else:
+                            print(f">>> Wrong key! You pressed '{key_str.upper()}', need '{required_key.upper()}' or SPACE")
+                        return
+                    # If not paused for event, allow space to start/unpause the video initially
+                    if key_str == ' ' or key_str == 'space':
+                        if self.video_player.is_paused:
+                            print("DEBUG: Space pressed, starting video")
+                            self.video_player.play()
+                        return
+                    # Otherwise, normal key registration if not paused for event
+                    if not self.video_player.is_paused and self.pattern_display:
+                        current_frame = self.video_player.get_displayed_frame_number()
+                        self.pattern_display.register_key_press(key_str, current_frame)
+                except Exception as e:
+                    print(f"DEBUG: Exception in on_practice_key_press: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+            def on_practice_key_release(key):
+                try:
+                    key_str = None
+                    try:
+                        key_str = key.char
+                    except AttributeError:
+                        key_str = str(key).replace('Key.', '')
+                    if self.pattern_display:
+                        self.pattern_display.register_key_release(key_str)
+                except:
+                    pass
+
+            # Ensure any previous listener is stopped
+            if self.keyboard_listener:
+                self.keyboard_listener.stop()
+                self.keyboard_listener = None
+            # Start the listener ONCE from the main thread, before entering the loop
+            self.keyboard_listener = keyboard.Listener(on_press=on_practice_key_press, on_release=on_practice_key_release)
+            self.keyboard_listener.start()
+
             self.video_player.is_playing = True
             self.video_player.is_paused = True
-            # Don't set start_time yet - wait until playback actually starts
-            
             self.running = True
             
             while self.running:
                 ret, frame = self.video_player.get_frame()
                 
                 if ret and frame is not None:
-                    # Get frame number using OpenCV's ground truth
                     displayed_frame = self.video_player.get_displayed_frame_number()
+                    
+                    # Check if we need to pause before the next note
+                    if (next_pause_idx < len(note_frames)
+                        and displayed_frame >= note_frames[next_pause_idx] - pause_lead_frames
+                        and not self.video_player.is_paused
+                        and not paused_for_event):
+                        self.video_player.pause()
+                        paused_for_event = True
+                        required_key = get_required_key()
+                        print(f"\n{'='*50}")
+                        print(f">>> PAUSED BEFORE KEY EVENT <<<")
+                        print(f">>> PRESS THE '{required_key.upper()}' KEY TO CONTINUE <<<")
+                        print(f"{'='*50}\n")
                     
                     # Render pattern display
                     frame = self.pattern_display.render(frame, displayed_frame, self.video_player.fps)
                     
+                    # Draw required key in upper left above timeline if paused for event
+                    if paused_for_event and required_key is not None:
+                        font = cv2.FONT_HERSHEY_SIMPLEX
+                        font_scale = 1.2
+                        thickness = 3
+                        text = f"Press: {required_key.upper()}"
+                        # Place above timeline (assume timeline at bottom 120px)
+                        x, y = 30, self.video_player.cap.get(cv2.CAP_PROP_FRAME_HEIGHT) - 160 if self.video_player.cap else (30, 40)
+                        y = int(y)
+                        cv2.putText(frame, text, (x, y), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA)
+                        # Also print to console periodically so user always sees it
+                        if displayed_frame % 30 == 0:  # Print every ~1 second at 30fps
+                            print(f">>> Waiting for '{required_key.upper()}' key to continue...")
+                    
                     # Display frame
                     cv2.imshow('Dojo - Training Mode', frame)
                     
-                # Handle keyboard input
-                # Use minimal delay - frame timing is handled by video player
+                # Handle keyboard input (only for ESC/restart)
                 delay = 1  # 1ms for responsive input
                 key = cv2.waitKey(delay) & 0xFF
                 
-                if key == ord(' '):
-                    self.video_player.toggle_pause()
-                elif key == ord('r') or key == ord('R'):
+                if key == ord('r') or key == ord('R'):
                     # Restart
                     self.video_player.current_frame = 0
                     self.video_player.start_time = time.time()
@@ -187,6 +287,12 @@ class DojoApp:
                     self.video_player.is_paused = True
                     self.pattern_display.reset()
                     self.pattern_display.add_notes(pattern.get_key_presses())
+                    # Reset pause logic
+                    notes = self.pattern_display.notes if self.pattern_display else []
+                    note_frames = sorted([note.frame for note in notes])
+                    next_pause_idx = 0
+                    paused_for_event = False
+                    required_key = None
                 elif key == 27:  # ESC
                     break
                     
@@ -202,7 +308,9 @@ class DojoApp:
             traceback.print_exc()
             
         finally:
-            self._stop_practice_listener()
+            if self.keyboard_listener:
+                self.keyboard_listener.stop()
+                self.keyboard_listener = None
             self.video_player.cleanup()
             
     def _start_practice_listener(self):
