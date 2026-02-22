@@ -156,17 +156,25 @@ class DojoApp:
             # --- Setup for Stage 2: pause before key events, require correct key press ---
             notes = self.pattern_display.notes if self.pattern_display else []
             note_frames = sorted([note.frame for note in notes])
-            pause_lead_time = 1.0  # seconds before event to pause
             fps = self.video_player.fps if self.video_player else 30
-            pause_lead_frames = int(pause_lead_time * fps)
             next_pause_idx = 0
             paused_for_event = False
             required_key = None
+            
+            # Build a lookup map: key -> pause_before_seconds from library
+            key_to_pause_time = {}
+            for trigger in self.trigger_library.list_triggers():
+                key_to_pause_time[trigger['key']] = trigger['pause_before_seconds']
 
             def get_required_key():
                 if next_pause_idx < len(notes):
                     return notes[next_pause_idx].key
                 return None
+            
+            def get_pause_lead_frames(key):
+                """Get pause lead time in frames for a given key, based on library or default"""
+                pause_time = key_to_pause_time.get(key, 1.0)  # Default to 1.0 if not in library
+                return int(pause_time * fps)
 
             def on_practice_key_press(key):
                 nonlocal paused_for_event, next_pause_idx, required_key
@@ -246,17 +254,22 @@ class DojoApp:
                     displayed_frame = self.video_player.get_displayed_frame_number()
                     
                     # Check if we need to pause before the next note
+                    # Dynamically calculate pause_lead_frames based on the key in the library
                     if (next_pause_idx < len(note_frames)
-                        and displayed_frame >= note_frames[next_pause_idx] - pause_lead_frames
                         and not self.video_player.is_paused
                         and not paused_for_event):
-                        self.video_player.pause()
-                        paused_for_event = True
-                        required_key = get_required_key()
-                        print(f"\n{'='*50}")
-                        print(f">>> PAUSED BEFORE KEY EVENT <<<")
-                        print(f">>> PRESS THE '{required_key.upper()}' KEY TO CONTINUE <<<")
-                        print(f"{'='*50}\n")
+                        next_key = get_required_key()
+                        pause_lead_frames = get_pause_lead_frames(next_key)
+                        
+                        if displayed_frame >= note_frames[next_pause_idx] - pause_lead_frames:
+                            self.video_player.pause()
+                            paused_for_event = True
+                            required_key = next_key
+                            pause_time = key_to_pause_time.get(required_key, 1.0)
+                            print(f"\n{'='*50}")
+                            print(f">>> PAUSED {pause_time}s BEFORE KEY EVENT <<<")
+                            print(f">>> PRESS THE '{required_key.upper()}' KEY TO CONTINUE <<<")
+                            print(f"{'='*50}\n")
                     
                     # Render pattern display
                     frame = self.pattern_display.render(frame, displayed_frame, self.video_player.fps)
