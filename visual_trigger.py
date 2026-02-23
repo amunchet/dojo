@@ -20,25 +20,31 @@ class VisualTrigger:
         """
         self.roi = None  # (x, y, w, h)
         self.last_frame_roi = None
+        self.secondary_roi = None  # (x, y, w, h)
+        self.last_frame_secondary_roi = None
         self.threshold = threshold
         self.is_selecting = False
+        self.is_selecting_secondary = False
         self.selection_start = None
         self.selection_current = None
         
-    def start_selection(self, x: int, y: int):
+    def start_selection(self, x: int, y: int, secondary: bool = False):
         """Start selecting ROI"""
-        self.is_selecting = True
+        if secondary:
+            self.is_selecting_secondary = True
+        else:
+            self.is_selecting = True
         self.selection_start = (x, y)
         self.selection_current = (x, y)
         
     def update_selection(self, x: int, y: int):
         """Update selection during drag"""
-        if self.is_selecting:
+        if self.is_selecting or self.is_selecting_secondary:
             self.selection_current = (x, y)
             
     def finish_selection(self):
         """Finish ROI selection"""
-        if self.is_selecting and self.selection_start and self.selection_current:
+        if (self.is_selecting or self.is_selecting_secondary) and self.selection_start and self.selection_current:
             x1, y1 = self.selection_start
             x2, y2 = self.selection_current
             
@@ -49,19 +55,26 @@ class VisualTrigger:
             h = abs(y2 - y1)
             
             if w > 10 and h > 10:  # Minimum size
-                self.roi = (x, y, w, h)
-                self.last_frame_roi = None
-                print(f"ROI set: {self.roi}")
+                if self.is_selecting_secondary:
+                    self.secondary_roi = (x, y, w, h)
+                    self.last_frame_secondary_roi = None
+                    print(f"Secondary ROI set: {self.secondary_roi}")
+                else:
+                    self.roi = (x, y, w, h)
+                    self.last_frame_roi = None
+                    print(f"ROI set: {self.roi}")
             else:
                 print("ROI too small, selection cancelled")
-                
+
         self.is_selecting = False
+        self.is_selecting_secondary = False
         self.selection_start = None
         self.selection_current = None
         
     def cancel_selection(self):
         """Cancel ROI selection"""
         self.is_selecting = False
+        self.is_selecting_secondary = False
         self.selection_start = None
         self.selection_current = None
         
@@ -70,14 +83,24 @@ class VisualTrigger:
         self.roi = None
         self.last_frame_roi = None
         print("ROI cleared")
+
+    def clear_secondary_roi(self):
+        """Clear the secondary ROI"""
+        self.secondary_roi = None
+        self.last_frame_secondary_roi = None
+        print("Secondary ROI cleared")
         
     def has_roi(self) -> bool:
         """Check if ROI is set"""
         return self.roi is not None
+
+    def has_secondary_roi(self) -> bool:
+        """Check if secondary ROI is set"""
+        return self.secondary_roi is not None
         
     def get_selection_rect(self) -> Optional[Tuple[int, int, int, int]]:
         """Get current selection rectangle during drag"""
-        if self.is_selecting and self.selection_start and self.selection_current:
+        if (self.is_selecting or self.is_selecting_secondary) and self.selection_start and self.selection_current:
             x1, y1 = self.selection_start
             x2, y2 = self.selection_current
             x = min(x1, x2)
@@ -129,6 +152,42 @@ class VisualTrigger:
             return True
             
         return False
+
+    def detect_secondary_change(self, frame: np.ndarray) -> bool:
+        """
+        Detect if secondary ROI has changed significantly
+
+        Args:
+            frame: Current video frame
+
+        Returns:
+            True if significant change detected
+        """
+        if not self.secondary_roi:
+            return False
+
+        x, y, w, h = self.secondary_roi
+
+        if y + h > frame.shape[0] or x + w > frame.shape[1]:
+            return False
+
+        current_roi = frame[y:y+h, x:x+w].copy()
+        current_gray = cv2.cvtColor(current_roi, cv2.COLOR_BGR2GRAY)
+
+        if self.last_frame_secondary_roi is None:
+            self.last_frame_secondary_roi = current_gray
+            return False
+
+        diff = cv2.absdiff(self.last_frame_secondary_roi, current_gray)
+        mean_diff = np.mean(diff)
+
+        self.last_frame_secondary_roi = current_gray
+
+        if mean_diff > self.threshold:
+            print(f"Secondary visual change detected: {mean_diff:.2f}")
+            return True
+
+        return False
         
     def draw_roi(self, frame: np.ndarray, color=(0, 255, 0), thickness=2):
         """
@@ -144,11 +203,21 @@ class VisualTrigger:
             cv2.rectangle(frame, (x, y), (x + w, y + h), color, thickness)
             cv2.putText(frame, "ROI", (x, y - 10), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+        if self.secondary_roi:
+            x, y, w, h = self.secondary_roi
+            sec_color = (255, 0, 255)  # Magenta
+            cv2.rectangle(frame, (x, y), (x + w, y + h), sec_color, thickness)
+            cv2.putText(frame, "ROI 2", (x, y - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, sec_color, 2)
                        
         # Draw selection in progress
         selection = self.get_selection_rect()
         if selection:
             x, y, w, h = selection
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 255, 0), 2)
+            sel_color = (255, 255, 0)
+            if self.is_selecting_secondary:
+                sel_color = (255, 0, 255)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), sel_color, 2)
             cv2.putText(frame, "Selecting...", (x, y - 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, sel_color, 2)

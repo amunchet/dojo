@@ -438,7 +438,8 @@ class DojoApp:
     def _mouse_callback_recording(self, event, x, y, flags, param):
         """Mouse callback for ROI selection in recording mode"""
         if event == cv2.EVENT_LBUTTONDOWN:
-            self.visual_trigger.start_selection(x, y)
+            is_shift = (flags & cv2.EVENT_FLAG_SHIFTKEY) != 0
+            self.visual_trigger.start_selection(x, y, secondary=is_shift)
         elif event == cv2.EVENT_MOUSEMOVE:
             self.visual_trigger.update_selection(x, y)
         elif event == cv2.EVENT_LBUTTONUP:
@@ -560,6 +561,7 @@ class DojoApp:
             print("  SPACE - Play/Pause")
             print("  ESC   - Stop and save recording")
             print("  Click & Drag - Select ROI for visual triggers")
+            print("  Shift + Drag - Select ROI2 (secondary trigger)")
             print("  C     - Clear ROI")
             print("\nReady to record. Press SPACE to start.")
             
@@ -581,6 +583,8 @@ class DojoApp:
             recording_started = False
             was_paused = True
             visual_trigger_mode = False  # Whether we're waiting for key input after trigger
+            visual_trigger_source = None  # 'primary' or 'secondary'
+            last_primary_trigger_frame = None
             
             # Main loop
             while self.running:
@@ -593,11 +597,13 @@ class DojoApp:
                     current_time = displayed_frame / self.video_player.fps
                     
                     # Check for visual trigger if ROI is set and recording
-                    if recording_started and not self.video_player.is_paused and self.visual_trigger.has_roi():
-                        if self.visual_trigger.detect_change(frame):
+                    if recording_started and not self.video_player.is_paused:
+                        # Primary ROI (library matching/saving) has priority
+                        if self.visual_trigger.has_roi() and self.visual_trigger.detect_change(frame):
                             # Visual change detected - check library first
                             self.video_player.pause()
                             self.pending_trigger_frame = displayed_frame
+                            last_primary_trigger_frame = displayed_frame
                             
                             # Check if this matches a known trigger in the library
                             matched_trigger = self.trigger_library.find_matching_trigger(
@@ -616,7 +622,19 @@ class DojoApp:
                             else:
                                 # Unknown trigger - ask user for key
                                 visual_trigger_mode = True
+                                visual_trigger_source = 'primary'
                                 print(f"\n>>> NEW visual trigger at frame {displayed_frame}! Enter key to associate (or ESC to skip): ", end='', flush=True)
+                        # Secondary ROI only fires if primary did not
+                        elif (
+                            self.visual_trigger.has_secondary_roi()
+                            and self.visual_trigger.detect_secondary_change(frame)
+                            and last_primary_trigger_frame != displayed_frame
+                        ):
+                            self.video_player.pause()
+                            self.pending_trigger_frame = displayed_frame
+                            visual_trigger_mode = True
+                            visual_trigger_source = 'secondary'
+                            print(f"\n>>> SECONDARY ROI trigger at frame {displayed_frame}! Enter key (or ESC to skip): ", end='', flush=True)
                     
                     # Display frame info
                     frame_copy = frame.copy()
@@ -645,6 +663,9 @@ class DojoApp:
                     if self.visual_trigger.has_roi():
                         cv2.putText(frame_copy, "ROI Active", (10, 60), 
                                    font, 0.6, (0, 255, 0), 2)
+                    if self.visual_trigger.has_secondary_roi():
+                        cv2.putText(frame_copy, "ROI2 Active", (10, 85), 
+                                   font, 0.6, (255, 0, 255), 2)
                     
                     cv2.imshow('Dojo - Training Mode', frame_copy)
                     
@@ -658,6 +679,7 @@ class DojoApp:
                     if key == 27:  # ESC - skip this trigger
                         print("Skipped")
                         visual_trigger_mode = False
+                        visual_trigger_source = None
                         self.pending_trigger_frame = None
                         self.video_player.play()
                     else:
@@ -666,31 +688,33 @@ class DojoApp:
                         self.input_recorder.record_frame_based_keystroke(self.pending_trigger_frame, key_char, 'press')
                         print(f"'{key_char}' recorded for frame {self.pending_trigger_frame}")
                         
-                        # Ask if user wants to save this as a library trigger
-                        print("\nSave this visual trigger to library? (y/n): ", end='', flush=True)
-                        save_choice = input().strip().lower()
-                        
-                        if save_choice == 'y':
-                            # Get spell name
-                            spell_name = input("Enter spell/ability name: ").strip()
-                            pause_before = input("Pause before (seconds, default 1.0): ").strip()
-                            try:
-                                pause_before = float(pause_before) if pause_before else 1.0
-                            except:
-                                pause_before = 1.0
+                        # Primary ROI: optionally save to library
+                        if visual_trigger_source == 'primary':
+                            print("\nSave this visual trigger to library? (y/n): ", end='', flush=True)
+                            save_choice = input().strip().lower()
                             
-                            # Extract ROI image from current frame
-                            x, y, w, h = self.visual_trigger.roi
-                            roi_image = frame[y:y+h, x:x+w].copy()
-                            
-                            # Save to library
-                            trigger_id = self.trigger_library.add_trigger(
-                                roi_image, self.visual_trigger.roi, 
-                                key_char, spell_name, pause_before
-                            )
-                            print(f"Trigger saved! ID: {trigger_id}\n")
+                            if save_choice == 'y':
+                                # Get spell name
+                                spell_name = input("Enter spell/ability name: ").strip()
+                                pause_before = input("Pause before (seconds, default 1.0): ").strip()
+                                try:
+                                    pause_before = float(pause_before) if pause_before else 1.0
+                                except:
+                                    pause_before = 1.0
+                                
+                                # Extract ROI image from current frame
+                                x, y, w, h = self.visual_trigger.roi
+                                roi_image = frame[y:y+h, x:x+w].copy()
+                                
+                                # Save to library
+                                trigger_id = self.trigger_library.add_trigger(
+                                    roi_image, self.visual_trigger.roi, 
+                                    key_char, spell_name, pause_before
+                                )
+                                print(f"Trigger saved! ID: {trigger_id}\n")
                         
                         visual_trigger_mode = False
+                        visual_trigger_source = None
                         self.pending_trigger_frame = None
                         self.video_player.play()
                     continue
