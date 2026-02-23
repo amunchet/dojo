@@ -137,8 +137,8 @@ class DojoApp:
             
         # Initialize pattern display
         self.pattern_display = PatternDisplay(
-            screen_width=int(self.video_player.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-            screen_height=int(self.video_player.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            screen_width=int(self.video_player.frame_width),
+            screen_height=int(self.video_player.frame_height)
         )
         # Provide trigger metadata (pause offsets and thumbnails) to the pattern display
         key_metadata = {}
@@ -289,8 +289,7 @@ class DojoApp:
                         thickness = 3
                         text = f"Press: {required_key.upper()}"
                         # Place above timeline (assume timeline at bottom 120px)
-                        x, y = 30, self.video_player.cap.get(cv2.CAP_PROP_FRAME_HEIGHT) - 160 if self.video_player.cap else (30, 40)
-                        y = int(y)
+                        x, y = 30, self.video_player.frame_height - 160
                         cv2.putText(frame, text, (x, y), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA)
                         # Also print to console periodically so user always sees it
                         if displayed_frame % 30 == 0:  # Print every ~1 second at 30fps
