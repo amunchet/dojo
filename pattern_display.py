@@ -131,6 +131,70 @@ class PatternDisplay:
         self.combo = 0
         self.max_combo = 0
         self.lookahead_frames = 150  # Frames of timeline visible ahead (5 sec @ 30fps)
+        self.key_metadata: Dict[str, Dict] = {}
+        self.thumbnail_cache: Dict[str, Optional[np.ndarray]] = {}
+        self.default_pause_before_seconds = 1.0
+
+    def set_key_metadata(self, key_metadata: Dict[str, Dict]):
+        """
+        Set key metadata for pause timing and thumbnails.
+
+        Expected format:
+            {
+                'key': {
+                    'pause_before_seconds': 1.0,
+                    'template_path': '/path/to/image.png'
+                },
+                ...
+            }
+        """
+        self.key_metadata = key_metadata or {}
+        self.thumbnail_cache.clear()
+
+    def _get_pause_lead_frames(self, key: str, fps: float) -> int:
+        pause_time = self.default_pause_before_seconds
+        meta = self.key_metadata.get(key)
+        if meta and 'pause_before_seconds' in meta:
+            pause_time = meta['pause_before_seconds']
+        return int(pause_time * fps)
+
+    def _load_thumbnail(self, key: str) -> Optional[np.ndarray]:
+        if key in self.thumbnail_cache:
+            return self.thumbnail_cache[key]
+
+        meta = self.key_metadata.get(key)
+        if not meta or 'template_path' not in meta:
+            self.thumbnail_cache[key] = None
+            return None
+
+        path = meta['template_path']
+        if not path or not isinstance(path, str):
+            self.thumbnail_cache[key] = None
+            return None
+
+        image = cv2.imread(path)
+        if image is None:
+            self.thumbnail_cache[key] = None
+            return None
+
+        # Resize thumbnail to fit note size
+        size = int(self.KEY_SIZE * 0.9)
+        image = cv2.resize(image, (size, size))
+        self.thumbnail_cache[key] = image
+        return image
+
+    def _frame_to_x(self, target_frame: int, current_frame: int,
+                    screen_width: int, center_x_ratio: float) -> int:
+        """Map an arbitrary frame to x position, clamped to screen bounds."""
+        frames_until = target_frame - current_frame
+        center_x = int(screen_width * center_x_ratio)
+
+        if frames_until >= 0:
+            x = center_x + int((frames_until / self.lookahead_frames) * (screen_width - center_x))
+        else:
+            x = center_x + int((frames_until / 15) * center_x)
+
+        return max(0, min(x, screen_width - 1))
         
     def add_notes(self, key_presses: List[Dict]):
         """
@@ -246,7 +310,7 @@ class PatternDisplay:
         
         return frame
         
-    def _draw_notes(self, frame: np.ndarray, current_frame: int) -> np.ndarray:
+    def _draw_notes(self, frame: np.ndarray, current_frame: int, fps: float) -> np.ndarray:
         """Draw all active key notes on the timeline"""
         y_center = self.screen_height - self.TIMELINE_HEIGHT // 2
         center_x = int(self.screen_width * self.CENTER_X_RATIO)
@@ -272,14 +336,52 @@ class PatternDisplay:
                     color = self.COLOR_KEY_CLOSE  # Cyan - very close to center
                 else:
                     color = self.COLOR_KEY_UPCOMING  # Blue - normal
+
+            # Draw lead-time bar from pause moment to actual event
+            lead_frames = self._get_pause_lead_frames(note.key, fps)
+            pause_frame = note.frame - lead_frames
+            frames_until_pause = pause_frame - current_frame
+            frames_until_event = note.frame - current_frame
+            # Only draw if any part is within visible window
+            if (
+                not (frames_until_pause > self.lookahead_frames and frames_until_event > self.lookahead_frames)
+                and not (frames_until_pause < -15 and frames_until_event < -15)
+            ):
+                pause_x = self._frame_to_x(pause_frame, current_frame, self.screen_width, self.CENTER_X_RATIO)
+                event_x = self._frame_to_x(note.frame, current_frame, self.screen_width, self.CENTER_X_RATIO)
+                bar_y = y_center - self.KEY_SIZE // 2
+                bar_height = self.KEY_SIZE
+                x1, x2 = sorted([pause_x, event_x])
+                # Stop bar at the left edge of the event box to avoid covering it
+                if event_x >= pause_x:
+                    x2 = min(x2, event_x - (self.KEY_SIZE // 2))
+                else:
+                    x1 = max(x1, event_x + (self.KEY_SIZE // 2))
+                cv2.rectangle(frame, (x1, bar_y), (x2, bar_y + bar_height), color, -1)
+                cv2.rectangle(frame, (x1, bar_y), (x2, bar_y + bar_height), (0, 0, 0), 1)
                     
-            # Draw key note
+            # Draw key note outline at event position
             size = self.KEY_SIZE
             cv2.rectangle(frame, (x - size//2, y_center - size//2),
                          (x + size//2, y_center + size//2),
                          color, 2)
-            
-            # Draw key label
+
+            # Place thumbnail at pause start (offset) position
+            thumb = self._load_thumbnail(note.key)
+            if thumb is not None:
+                th, tw = thumb.shape[:2]
+                icon_x = (pause_x + (tw // 2)) if 'pause_x' in locals() else x
+                x1 = max(0, icon_x - tw // 2)
+                y1 = max(0, y_center - th // 2)
+                x2 = min(self.screen_width, x1 + tw)
+                y2 = min(self.screen_height, y1 + th)
+
+                roi = frame[y1:y2, x1:x2]
+                thumb_crop = thumb[0:(y2 - y1), 0:(x2 - x1)]
+                if roi.shape == thumb_crop.shape:
+                    frame[y1:y2, x1:x2] = thumb_crop
+
+            # Draw key label at event position (where action is recorded)
             key_text = str(note.key).upper()
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.6
@@ -366,7 +468,7 @@ class PatternDisplay:
         frame = self._draw_timeline_bar(frame, current_time)
         
         # Draw notes
-        frame = self._draw_notes(frame, current_frame)
+        frame = self._draw_notes(frame, current_frame, fps)
         
         # Draw score panel
         frame = self._draw_score_panel(frame)

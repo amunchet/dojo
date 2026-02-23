@@ -140,6 +140,14 @@ class DojoApp:
             screen_width=int(self.video_player.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
             screen_height=int(self.video_player.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         )
+        # Provide trigger metadata (pause offsets and thumbnails) to the pattern display
+        key_metadata = {}
+        for trigger in self.trigger_library.list_triggers():
+            key_metadata[trigger['key']] = {
+                'pause_before_seconds': trigger.get('pause_before_seconds', 1.0),
+                'template_path': trigger.get('template_path')
+            }
+        self.pattern_display.set_key_metadata(key_metadata)
         self.pattern_display.add_notes(pattern.get_key_presses())
         
         # Reset video to frame 0
