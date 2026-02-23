@@ -9,7 +9,7 @@ import json
 import cv2
 import time
 from datetime import datetime
-from video_player import VideoPlayer
+from video_player_24fps import VideoPlayer
 from input_recorder import InputRecorder
 from pattern_manager import PatternManager
 from pattern_display import PatternDisplay
