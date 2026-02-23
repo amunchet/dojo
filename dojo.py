@@ -541,17 +541,45 @@ class DojoApp:
         print("STAGE 1 - Keystroke Recording")
         print("=" * 50)
         
-        # Get YouTube URL from user
-        self.video_url = input("\nEnter YouTube URL: ").strip()
-        
-        if not self.video_url:
-            print("Error: No URL provided")
+        # Show cached videos (if any) and get YouTube URL from user
+        cache_dir = "data/cache"
+        cached_files = []
+        if os.path.exists(cache_dir):
+            cached_files = [f for f in os.listdir(cache_dir) if f.lower().endswith(('.mp4', '.mkv', '.webm'))]
+            cached_files.sort()
+
+        if cached_files:
+            print("\nCached videos:")
+            for i, fname in enumerate(cached_files, 1):
+                print(f"  {i} - {fname}")
+            print("\nEnter a number to use a cached video, or paste a YouTube URL:")
+
+        user_input = input("\nEnter YouTube URL (or number): ").strip()
+
+        if not user_input:
+            print("Error: No input provided")
             return
+
+        # If user chose a cached file by number
+        if cached_files and user_input.isdigit():
+            idx = int(user_input) - 1
+            if 0 <= idx < len(cached_files):
+                selected_file = cached_files[idx]
+                video_path = os.path.join(cache_dir, selected_file)
+                self.video_url = None
+            else:
+                print("Invalid selection.")
+                return
+        else:
+            # Treat as URL
+            self.video_url = user_input
+            video_path = None
             
         try:
             # Download and load video
             print("\nPreparing video...")
-            video_path = self.video_player.download_video(self.video_url)
+            if not video_path:
+                video_path = self.video_player.download_video(self.video_url)
             
             if not self.video_player.load_video(video_path):
                 print("Error: Failed to load video")
@@ -585,6 +613,8 @@ class DojoApp:
             visual_trigger_mode = False  # Whether we're waiting for key input after trigger
             visual_trigger_source = None  # 'primary' or 'secondary'
             last_primary_trigger_frame = None
+            last_secondary_trigger_frame = -999999
+            secondary_cooldown_frames = 10
             
             # Main loop
             while self.running:
@@ -629,11 +659,13 @@ class DojoApp:
                             self.visual_trigger.has_secondary_roi()
                             and self.visual_trigger.detect_secondary_change(frame)
                             and last_primary_trigger_frame != displayed_frame
+                            and (displayed_frame - last_secondary_trigger_frame) >= secondary_cooldown_frames
                         ):
                             self.video_player.pause()
                             self.pending_trigger_frame = displayed_frame
                             visual_trigger_mode = True
                             visual_trigger_source = 'secondary'
+                            last_secondary_trigger_frame = displayed_frame
                             print(f"\n>>> SECONDARY ROI trigger at frame {displayed_frame}! Enter key (or ESC to skip): ", end='', flush=True)
                     
                     # Display frame info
