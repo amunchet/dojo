@@ -148,9 +148,11 @@ class DojoApp:
         
         print("\nControls:")
         print("  Press required key to start (shown on screen)")
+        print("  < (or ,) - Jump to prev key press (when paused) or seek back 5s")
+        print("  > (or .) - Jump to next key press (when paused) or seek forward 5s")
         print("  R     - Restart")
         print("  ESC   - Exit")
-        print("\nReady to play. Video will pause 1 second before each key event.")
+        print("\nReady to play. Video will pause before each key event.")
         
         try:
             # --- Setup for Stage 2: pause before key events, require correct key press ---
@@ -188,7 +190,72 @@ class DojoApp:
                     except AttributeError:
                         key_str = str(key).replace('Key.', '')
                     
-                    print(f"DEBUG: Key pressed: '{key_str}' (type: {type(key_str)})")
+                    print(f"DEBUG: Key pressed: '{key_str}' (type: {type(key_str)}), paused_for_event={paused_for_event}, is_paused={self.video_player.is_paused}")
+                    
+                    # Handle < to seek backward / jump to previous
+                    if key_str == '<' or key_str == ',':
+                        if paused_for_event and next_pause_idx > 0:
+                            next_pause_idx -= 1
+                            new_frame = note_frames[next_pause_idx]
+                            print(f"\n<<< Jumping to previous key press at frame {new_frame}")
+                        else:
+                            seek_frames = int(5 * fps)
+                            new_frame = max(0, self.video_player.current_frame - seek_frames)
+                            print(f"\n<<< Seeking backward 5 seconds to frame {new_frame}")
+                        
+                        self.video_player.current_frame = new_frame
+                        self.video_player.start_time = time.time() - (new_frame / fps)
+                        self.video_player.total_paused_time = 0.0
+                        self.video_player.is_paused = True
+                        self.video_player.pause_time = time.time()
+                        self.video_player._request_seek(new_frame)
+                        
+                        if not (paused_for_event and next_pause_idx > 0):
+                            next_pause_idx = 0
+                            for i, nf in enumerate(note_frames):
+                                if nf > new_frame:
+                                    next_pause_idx = i
+                                    break
+                        paused_for_event = False
+                        required_key = None
+                        return
+                    
+                    # Handle > to seek forward / jump to next
+                    if key_str == '>' or key_str == '.':
+                        if paused_for_event and next_pause_idx < len(note_frames) - 1:
+                            next_pause_idx += 1
+                            new_frame = note_frames[next_pause_idx]
+                            print(f"\n>>> Jumping to next key press at frame {new_frame}")
+                        else:
+                            seek_frames = int(5 * fps)
+                            new_frame = min(self.video_player.total_frames - 1, 
+                                           self.video_player.current_frame + seek_frames)
+                            print(f"\n>>> Seeking forward 5 seconds to frame {new_frame}")
+                        
+                        self.video_player.current_frame = new_frame
+                        self.video_player.start_time = time.time() - (new_frame / fps)
+                        self.video_player.total_paused_time = 0.0
+                        self.video_player.is_paused = True
+                        self.video_player.pause_time = time.time()
+                        self.video_player._request_seek(new_frame)
+                        
+                        if not (paused_for_event and next_pause_idx < len(note_frames) - 1):
+                            next_pause_idx = 0
+                            for i, nf in enumerate(note_frames):
+                                if nf > new_frame:
+                                    next_pause_idx = i
+                                    break
+                        paused_for_event = False
+                        required_key = None
+                        return
+                    
+                    # Handle space to unpause at any time (unless waiting for specific required key)
+                    if (key_str == ' ' or key_str == 'space') and not (paused_for_event and required_key is not None):
+                        if self.video_player.is_paused:
+                            print("DEBUG: Space pressed, unpausing video")
+                            self.video_player.play()
+                            print(f"DEBUG: is_paused is now {self.video_player.is_paused}")
+                        return
                     
                     # Only allow resume if paused for event and correct key OR space is pressed
                     if paused_for_event and required_key is not None:
@@ -207,12 +274,6 @@ class DojoApp:
                             required_key = None
                         else:
                             print(f">>> Wrong key! You pressed '{key_str.upper()}', need '{required_key.upper()}' or SPACE")
-                        return
-                    # If not paused for event, allow space to start/unpause the video initially
-                    if key_str == ' ' or key_str == 'space':
-                        if self.video_player.is_paused:
-                            print("DEBUG: Space pressed, starting video")
-                            self.video_player.play()
                         return
                     # Otherwise, normal key registration if not paused for event
                     if not self.video_player.is_paused and self.pattern_display:
